@@ -93,9 +93,7 @@ type
 
   TImportBlock = class(TBlock);
 
-  TImports = class(TBlocks)
-    function LoadByName(AName: String): TBlock;
-  end;
+  TImports = class(TBlocks);
 
   { TSimpleTemplate }
 
@@ -196,15 +194,6 @@ begin
   for I := 0 to Count - 1 do
     if AName = Items[I].Text then
       Exit(Items[I]);
-end;
-
-{ TImports }
-
-function TImports.LoadByName(AName: String): TBlock;
-var
-  I: Integer;
-begin
-  Writeln('>>>>',AName);
 end;
 
 { TBlock }
@@ -310,7 +299,6 @@ function FindTag(ATag: String; AStartPos: Integer): Integer;
 var
   CurPos: Integer;
   TagEnd: Integer;
-  S: String;
 begin
   CurPos := PosEx(FStartTag, ATemplate, AStartPos);
   if CurPos = 0 then
@@ -320,7 +308,6 @@ begin
     TagEnd := PosEx(FEndTag, ATemplate, CurPos + Length(FStartTag));
     if TagEnd = 0 then
       Exit(0);
-    S := Trim(Copy(ATemplate, CurPos + Length(FStartTag), TagEnd - CurPos - Length(FEndTag)));
     if Trim(Copy(ATemplate, CurPos + Length(FStartTag), TagEnd - CurPos - Length(FEndTag))) = ATag then
       Exit(CurPos);
     CurPos := PosEx(FStartTag, ATemplate, TagEnd + Length(FEndTag));
@@ -526,7 +513,7 @@ var
   ResCond: Boolean;
   ResVal: String;
   LoopCnt: Integer;
-  CurItem, CurPart, CurImport: TBlock;
+  CurItem, CurPart: TBlock;
 begin
   if AItems.Count>0 then
   for I := 0 to AItems.Count - 1 do
