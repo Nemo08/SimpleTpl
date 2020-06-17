@@ -39,6 +39,7 @@ uses
 
 type
   EParserError = class(Exception);
+  EFileError = class(Exception);
 
   { Events }
 
@@ -86,12 +87,21 @@ type
     function FindByName(AName: String): TBlock;
   end;
 
+  { TImports }
+
+  TImportBlock = class(TBlock);
+
+  TImports = class(TBlocks)
+    function LoadByName(AName: String): TBlock;
+  end;
+
   { TSimpleTemplate }
 
   TSimpleTemplate = class
   private
     FBlocks: TBlock;
     FParts: TParts;
+    FImports: TImports;
     FLoops: TBlocks;
     FIfs: TBlocks;
     FValues: TBlocks;
@@ -106,6 +116,7 @@ type
     FStartPartTag: String;
     FEndPartTag: String;
     FPartTag: String;
+    FImportTag: String;
     FOnGetValue: TGetValueEvent;
     FIsRunning: Boolean;
     FStopping: Boolean;
@@ -134,6 +145,7 @@ type
     procedure GetIfs(AList: TStrings);
     procedure GetValues(AList: TStrings);
     property Parts: TParts read FParts;
+    property Imports: TImports read FImports;
   published
     property StartTag: String read FStartTag write FStartTag;
     property EndTag: String read FEndTag write FEndTag;
@@ -145,6 +157,7 @@ type
     property StartPartTag: String read FStartPartTag write FStartPartTag;
     property EndPartTag: String read FEndPartTag write FEndPartTag;
     property PartTag: String read FPartTag write FPartTag;
+    property ImportTag: String read FImportTag write FImportTag;
     property IsRunning: Boolean read FIsRunning;
     property Stopping: Boolean read FStopping;
     property OnGetValue: TGetValueEvent read FOnGetValue write FOnGetValue;
@@ -164,7 +177,8 @@ var
   DefaultEndLoopTag: String = 'endloop';
   DefaultStartPartTag: String = 'startpart';
   DefaultEndPartTag: String = 'endpart';
-  DefaultPartTrag: String = 'part';
+  DefaultPartTag: String = 'part';
+  DefaultImportTag: String = 'import';
 
 implementation
 
@@ -180,6 +194,15 @@ begin
   for I := 0 to Count - 1 do
     if AName = Items[I].Text then
       Exit(Items[I]);
+end;
+
+{ TImports }
+
+function TImports.LoadByName(AName: String): TBlock;
+var
+  I: Integer;
+begin
+  Writeln('>>>>',AName);
 end;
 
 { TBlock }
@@ -272,9 +295,11 @@ var
   CurPos: Integer;
   TagStart, TagEnd: Integer;
   TagText: String;
+  ImpTempl : TStringList;
 begin
   CurrentObject := ABlock;
   CurPos := 1;
+  ATemplate := StringReplace(ATemplate, FEndTag+#13#10, FEndTag,[rfReplaceAll, rfIgnoreCase]);
   while CurPos < Length(ATemplate) do
   begin
     TagStart := PosEx(FStartTag, ATemplate, CurPos);
@@ -359,7 +384,7 @@ begin
     if Pos(FStartPartTag + ' ', TagText) = 1 then
     begin
       TagText := Trim(Copy(TagText, Pos(FStartPartTag, TagText) + Length(FStartPartTag) + 1, Length(TagText)));
-      CurPos := Pos(FStartTag + FEndPartTag + FEndTag, ATemplate, TagEnd + Length(FEndTag));
+      CurPos := PosEx(FStartTag + FEndPartTag + FEndTag, ATemplate, TagEnd + Length(FEndTag));
       if CurPos = 0 then
         raise EParserError.Create('Unclosed part');
       NewObject := TBlock.Create(nil);
@@ -378,6 +403,24 @@ begin
       CurPos := TagEnd + Length(FEndTag);
       Continue;
     end;
+    if Pos(FImportTag + ' ', TagText) = 1 then
+    begin
+      CurPos := CurPos + Length(TagText + FEndTag);
+      TagText := Trim(Copy(TagText, Pos(FImportTag, TagText) + Length(FImportTag) + 2, Length(TagText)-Length(FImportTag)-3));
+
+      ImpTempl:=TStringList.Create;
+      try
+         ImpTempl.LoadFromFile(TagText);
+      except
+        raise EFileError.Create('Error loading file '+ TagText);
+      end;
+      NewObject := TImportBlock.Create(CurrentObject);
+      DoPrepare(ImpTempl.Text, NewObject);
+      CurrentObject.Items.Add(NewObject);
+      CurPos := TagEnd + Length(FEndTag);
+      ImpTempl.Free;
+      Continue;
+    end;
     NewObject := TValueBlock.Create(CurrentObject);
     if (CurrentObject is TIfBlock) and (TIfBlock(CurrentObject).IsElseIf) then
       TIfBlock(CurrentObject).ElseItems.Add(NewObject)
@@ -394,6 +437,7 @@ begin
   inherited;
   FBlocks := TBlock.Create(nil);
   FParts := TParts.Create(True);
+  FImports := TImports.Create(True);
   FLoops := TBlocks.Create(False);
   FIfs := TBlocks.Create(False);
   FValues := TBlocks.Create(False);
@@ -406,7 +450,8 @@ begin
   FEndLoopTag := DefaultEndLoopTag;
   FStartPartTag := DefaultStartPartTag;
   FEndPartTag := DefaultEndPartTag;
-  FPartTag := DefaultPartTrag;
+  FPartTag := DefaultPartTag;
+  FImportTag := DefaultImportTag;
   FPrepared := False;
   FIsRunning := False;
   FStopping := False;
@@ -455,8 +500,9 @@ var
   ResCond: Boolean;
   ResVal: String;
   LoopCnt: Integer;
-  CurItem, CurPart: TBlock;
+  CurItem, CurPart, CurImport: TBlock;
 begin
+  if AItems.Count>0 then
   for I := 0 to AItems.Count - 1 do
   begin
     if FStopping then
@@ -498,6 +544,11 @@ begin
         DoRun(CurPart.Items);
       Continue;
     end;
+    if CurItem is TImportBlock then
+    begin
+      DoRun(CurItem.Items);
+      Continue;
+    end;
     if CurItem is TValueBlock then
     begin
       ResVal := '';
@@ -505,7 +556,7 @@ begin
       Run := Run + ResVal;
       Continue;
     end;
-    if CurItem is TBlock then
+    if (CurItem is TBlock)and(CurItem.Text <>#13#10) then
       Run := Run + CurItem.Text;
   end;
 end;
