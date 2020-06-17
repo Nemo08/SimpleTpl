@@ -133,6 +133,7 @@ type
     procedure DoStartLoop(const ALoopName: String; const ALoopIndex: Integer; var ABreak: Boolean); virtual;
     procedure DoEndLoop(const ALoopName: String; const ALoopIndex: Integer; var ABreak: Boolean); virtual;
     procedure DoPrepare(ATemplate: String; ABlock: TBlock);
+    function DoLoadTemplate(ATemplateName: String):String; virtual;
   public
     constructor Create;
     destructor Destroy; override;
@@ -293,6 +294,20 @@ begin
     FOnEndLoop(Self, ALoopName, ALoopIndex, ABreak);
 end;
 
+function TSimpleTemplate.DoLoadTemplate(ATemplateName: String):String;
+var
+  ImpTempl : TStringList;
+begin
+  ImpTempl:=TStringList.Create;
+  try
+     ImpTempl.LoadFromFile(ATemplateName);
+  except
+    raise EFileError.Create('Error loading file '+ ATemplateName);
+  end;
+  Result := ImpTempl.Text;
+  ImpTempl.Free;
+end;
+
 procedure TSimpleTemplate.DoPrepare(ATemplate: String; ABlock: TBlock);
 
 function FindTag(ATag: String; AStartPos: Integer): Integer;
@@ -319,11 +334,11 @@ var
   CurrentObject, NewObject: TBlock;
   CurPos: Integer;
   TagStart, TagEnd: Integer;
-  TagText: String;
-  ImpTempl : TStringList;
+  TagText, ImpTempl: String;
 begin
   CurrentObject := ABlock;
   CurPos := 1;
+  //remove CR LF after tag
   ATemplate := StringReplace(ATemplate, FEndTag+#13#10, FEndTag,[rfReplaceAll, rfIgnoreCase]);
   while CurPos < Length(ATemplate) do
   begin
@@ -423,18 +438,11 @@ begin
     begin
       CurPos := CurPos + Length(TagText + FEndTag);
       TagText := Trim(Copy(TagText, Pos(FImportTag, TagText) + Length(FImportTag) + 2, Length(TagText)-Length(FImportTag)-3));
-
-      ImpTempl:=TStringList.Create;
-      try
-         ImpTempl.LoadFromFile(TagText);
-      except
-        raise EFileError.Create('Error loading file '+ TagText);
-      end;
+      ImpTempl:= DoLoadTemplate(TagText);
       NewObject := TImportBlock.Create(CurrentObject);
-      DoPrepare(ImpTempl.Text, NewObject);
+      DoPrepare(ImpTempl, NewObject);
       CurrentObject.Items.Add(NewObject);
       CurPos := TagEnd + Length(FEndTag);
-      ImpTempl.Free;
       Continue;
     end;
     NewObject := TValueBlock.Create(CurrentObject);
