@@ -4,3 +4,4 @@
 *.exe
 *.lps
 sample/backup
+/sample/backup
