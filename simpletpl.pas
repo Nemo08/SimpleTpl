@@ -59,6 +59,7 @@ type
     Text: String;
     constructor Create(AParent: TBlock);
     destructor Destroy; override;
+    procedure AddBlock(ABlock: TBlock); virtual;
   end;
 
   TValueBlock = class(TBlock);
@@ -70,6 +71,7 @@ type
     IsElseIf: Boolean;
     constructor Create(AParent: TBlock);
     destructor Destroy; override;
+    procedure AddBlock(ABlock: TBlock); override;
   end;
 
   { TLoopBlock }
@@ -91,9 +93,7 @@ type
 
   TImportBlock = class(TBlock);
 
-  TImports = class(TBlocks)
-    function LoadByName(AName: String): TBlock;
-  end;
+  TImports = class(TBlocks);
 
   { TSimpleTemplate }
 
@@ -133,12 +133,13 @@ type
     procedure DoStartLoop(const ALoopName: String; const ALoopIndex: Integer; var ABreak: Boolean); virtual;
     procedure DoEndLoop(const ALoopName: String; const ALoopIndex: Integer; var ABreak: Boolean); virtual;
     procedure DoPrepare(ATemplate: String; ABlock: TBlock);
+    function DoLoadTemplate(ATemplateName: String):String; virtual;
   public
     constructor Create;
     destructor Destroy; override;
     procedure AddPart(APartName: String; APartTemplate: String);
     procedure Prepare(ATemplate: String; AClearParts: Boolean = True);
-    function Run: String;
+    function Run(AStream: TStream = nil): String;
     procedure Stop;
     function GetLoopCounter(ALoopName: String): Integer;
     procedure GetLoops(AList: TStrings; OnlyActive: Boolean = False);
@@ -196,15 +197,6 @@ begin
       Exit(Items[I]);
 end;
 
-{ TImports }
-
-function TImports.LoadByName(AName: String): TBlock;
-var
-  I: Integer;
-begin
-  Writeln('>>>>',AName);
-end;
-
 { TBlock }
 
 constructor TBlock.Create(AParent: TBlock);
@@ -217,6 +209,11 @@ destructor TBlock.Destroy;
 begin
   Items.Free;
   inherited Destroy;
+end;
+
+procedure TBlock.AddBlock(ABlock: TBlock);
+begin
+  Items.Add(ABlock);
 end;
 
 { TIfBlock }
@@ -232,6 +229,14 @@ destructor TIfBlock.Destroy;
 begin
   ElseItems.Free;
   inherited Destroy;
+end;
+
+procedure TIfBlock.AddBlock(ABlock: TBlock);
+begin
+  if IsElseIf then
+    ElseItems.Add(ABlock)
+  else
+    Items.Add(ABlock);
 end;
 
 { TLoopBlock }
@@ -289,16 +294,51 @@ begin
     FOnEndLoop(Self, ALoopName, ALoopIndex, ABreak);
 end;
 
+function TSimpleTemplate.DoLoadTemplate(ATemplateName: String):String;
+var
+  ImpTempl : TStringList;
+begin
+  ImpTempl:=TStringList.Create;
+  try
+     ImpTempl.LoadFromFile(ATemplateName);
+  except
+    raise EFileError.Create('Error loading file '+ ATemplateName);
+  end;
+  Result := ImpTempl.Text;
+  ImpTempl.Free;
+end;
+
 procedure TSimpleTemplate.DoPrepare(ATemplate: String; ABlock: TBlock);
+
+function FindTag(ATag: String; AStartPos: Integer): Integer;
+var
+  CurPos: Integer;
+  TagEnd: Integer;
+begin
+  CurPos := PosEx(FStartTag, ATemplate, AStartPos);
+  if CurPos = 0 then
+    Exit(0);
+  while (CurPos < Length(ATemplate)) do
+  begin
+    TagEnd := PosEx(FEndTag, ATemplate, CurPos + Length(FStartTag));
+    if TagEnd = 0 then
+      Exit(0);
+    if Trim(Copy(ATemplate, CurPos + Length(FStartTag), TagEnd - CurPos - Length(FEndTag))) = ATag then
+      Exit(CurPos);
+    CurPos := PosEx(FStartTag, ATemplate, TagEnd + Length(FEndTag));
+  end;
+  Result := 0;
+end;
+
 var
   CurrentObject, NewObject: TBlock;
   CurPos: Integer;
   TagStart, TagEnd: Integer;
-  TagText: String;
-  ImpTempl : TStringList;
+  TagText, ImpTempl: String;
 begin
   CurrentObject := ABlock;
   CurPos := 1;
+  //remove CR LF after tag
   ATemplate := StringReplace(ATemplate, FEndTag+#13#10, FEndTag,[rfReplaceAll, rfIgnoreCase]);
   while CurPos < Length(ATemplate) do
   begin
@@ -306,7 +346,7 @@ begin
     if (TagStart = 0) then
     begin
       NewObject := TBlock.Create(CurrentObject);
-      CurrentObject.Items.Add(NewObject);
+      CurrentObject.AddBlock(NewObject);
       NewObject.Text := Copy(ATemplate, CurPos, Length(ATemplate));
       Break;
     end;
@@ -317,20 +357,14 @@ begin
     if TagStart > CurPos then
     begin
       NewObject := TBlock.Create(CurrentObject);
-      if (CurrentObject is TIfBlock) and (TIfBlock(CurrentObject).IsElseIf) then
-        TIfBlock(CurrentObject).ElseItems.Add(NewObject)
-      else
-        CurrentObject.Items.Add(NewObject);
+      CurrentObject.AddBlock(NewObject);
       NewObject.Text := Copy(ATemplate, CurPos, TagStart - CurPos);
     end;
     if Pos(FIfTag + ' ', TagText) = 1 then
     begin
       NewObject := TIfBlock.Create(CurrentObject);
       FIfs.Add(NewObject);
-      if (CurrentObject is TIfBlock) and TIfBlock(CurrentObject).IsElseIf then
-        TIfBlock(CurrentObject).ElseItems.Add(NewObject)
-      else
-        CurrentObject.Items.Add(NewObject);
+      CurrentObject.AddBlock(NewObject);
       CurrentObject := NewObject;
       CurrentObject.Text := Trim(Copy(TagText, Pos(FIfTag, TagText) + Length(FIfTag) + 1, Length(TagText)));
       CurPos := TagEnd + Length(FEndTag);
@@ -363,10 +397,7 @@ begin
         NewObject := NewObject.Parent;
       end;
       NewObject := TLoopBlock.Create(CurrentObject);
-      if (CurrentObject is TIfBlock) and (TIfBlock(CurrentObject).IsElseIf) then
-        TIfBlock(CurrentObject).ElseItems.Add(NewObject)
-      else
-        CurrentObject.Items.Add(NewObject);
+      CurrentObject.AddBlock(NewObject);
       NewObject.Text := TagText;
       CurrentObject := NewObject;
       FLoops.Add(CurrentObject);
@@ -384,7 +415,7 @@ begin
     if Pos(FStartPartTag + ' ', TagText) = 1 then
     begin
       TagText := Trim(Copy(TagText, Pos(FStartPartTag, TagText) + Length(FStartPartTag) + 1, Length(TagText)));
-      CurPos := PosEx(FStartTag + FEndPartTag + FEndTag, ATemplate, TagEnd + Length(FEndTag));
+      CurPos := FindTag(FEndPartTag, TagEnd + Length(FEndTag));
       if CurPos = 0 then
         raise EParserError.Create('Unclosed part');
       NewObject := TBlock.Create(nil);
@@ -399,7 +430,7 @@ begin
       TagText := Trim(Copy(TagText, Pos(FPartTag, TagText) + Length(FPartTag) + 1, Length(TagText)));
       NewObject := TPartBlock.Create(CurrentObject);
       NewObject.Text := TagText;
-      CurrentObject.Items.Add(NewObject);
+      CurrentObject.AddBlock(NewObject);
       CurPos := TagEnd + Length(FEndTag);
       Continue;
     end;
@@ -407,25 +438,15 @@ begin
     begin
       CurPos := CurPos + Length(TagText + FEndTag);
       TagText := Trim(Copy(TagText, Pos(FImportTag, TagText) + Length(FImportTag) + 2, Length(TagText)-Length(FImportTag)-3));
-
-      ImpTempl:=TStringList.Create;
-      try
-         ImpTempl.LoadFromFile(TagText);
-      except
-        raise EFileError.Create('Error loading file '+ TagText);
-      end;
+      ImpTempl:= DoLoadTemplate(TagText);
       NewObject := TImportBlock.Create(CurrentObject);
-      DoPrepare(ImpTempl.Text, NewObject);
+      DoPrepare(ImpTempl, NewObject);
       CurrentObject.Items.Add(NewObject);
       CurPos := TagEnd + Length(FEndTag);
-      ImpTempl.Free;
       Continue;
     end;
     NewObject := TValueBlock.Create(CurrentObject);
-    if (CurrentObject is TIfBlock) and (TIfBlock(CurrentObject).IsElseIf) then
-      TIfBlock(CurrentObject).ElseItems.Add(NewObject)
-    else
-      CurrentObject.Items.Add(NewObject);
+    CurrentObject.AddBlock(NewObject);
     NewObject.Text := TagText;
     FValues.Add(NewObject);
     CurPos := TagEnd + Length(FEndTag);
@@ -492,7 +513,7 @@ begin
   FPrepared := True;
 end;
 
-function TSimpleTemplate.Run: String;
+function TSimpleTemplate.Run(AStream: TStream): String;
 
 procedure DoRun(AItems: TBlocks);
 var
@@ -500,7 +521,7 @@ var
   ResCond: Boolean;
   ResVal: String;
   LoopCnt: Integer;
-  CurItem, CurPart, CurImport: TBlock;
+  CurItem, CurPart: TBlock;
 begin
   if AItems.Count>0 then
   for I := 0 to AItems.Count - 1 do
@@ -553,11 +574,18 @@ begin
     begin
       ResVal := '';
       DoGetValue(CurItem.Text, ResVal);
-      Run := Run + ResVal;
+      if Length(ResVal) > 0 then
+        if Assigned(AStream) then
+          AStream.WriteBuffer(ResVal[1], Length(ResVal))
+        else
+          Run := Run + ResVal;
       Continue;
     end;
-    if (CurItem is TBlock)and(CurItem.Text <>#13#10) then
-      Run := Run + CurItem.Text;
+    if (CurItem is TBlock) and (Length(CurItem.Text) > 0) then
+      if Assigned(AStream) then
+        AStream.WriteBuffer(CurItem.Text[1], Length(CurItem.Text))
+      else
+        Run := Run + CurItem.Text;
   end;
 end;
 
